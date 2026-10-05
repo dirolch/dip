@@ -65,7 +65,7 @@ class ArmAgent:
         if random.random() < self.epsilon:
             return random.randint(0, len(ACTIONS) - 1)
         with torch.no_grad():
-            s = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+            s = torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(self.device)
             q_vals = self.policy_net(s)
             return torch.argmax(q_vals).item()
 
@@ -75,11 +75,11 @@ class ArmAgent:
         batch = random.sample(self.memory, self.batch_size)
         states, actions, rewards, next_states, dones = zip(*batch)
 
-        s = torch.FloatTensor(states).to(self.device)
-        a = torch.LongTensor(actions).unsqueeze(1).to(self.device)
-        r = torch.FloatTensor(rewards).unsqueeze(1).to(self.device)
-        ns = torch.FloatTensor(next_states).to(self.device)
-        d = torch.FloatTensor(dones).unsqueeze(1).to(self.device)
+        s = torch.tensor(states, dtype=torch.float32).to(self.device)
+        a = torch.tensor(actions, dtype=torch.long).unsqueeze(1).to(self.device)
+        r = torch.tensor(rewards, dtype=torch.float32).unsqueeze(1).to(self.device)
+        ns = torch.tensor(next_states, dtype=torch.float32).to(self.device)
+        d = torch.tensor(dones, dtype=torch.float32).unsqueeze(1).to(self.device)
 
         q_current = self.policy_net(s).gather(1, a)
         with torch.no_grad():
@@ -89,7 +89,10 @@ class ArmAgent:
         loss = nn.MSELoss()(q_current, q_target)
         self.optimizer.zero_grad()
         loss.backward()
+        # Ограничение нормы градиента — защита от "взрыва" Q-значений
+        nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
         self.optimizer.step()
+        return loss.item()
 
     def update_epsilon(self):
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
@@ -112,7 +115,12 @@ episode = 1
 steps = 0
 max_steps_per_episode = 200
 score = 0
+last_score = 0
 hits = 0
+hit_rate = 0.0
+episodes_in_window = 0
+hits_in_window = 0
+loss_ema = None  # сглаженное значение функции потерь для телеметрии
 
 def get_state(t1, t2, end_pt, tgt_pt):
     return [
@@ -146,9 +154,6 @@ while running:
                 torch.save(agent.policy_net.state_dict(), "arm_model.pth")
                 print("Модель успешно сохранена в arm_model.pth! 🎉")
 
-
-
-
     _, end_pos = forward_kinematics(theta1, theta2)
     state = get_state(theta1, theta2, end_pos, (target_x, target_y))
     dist_before = math.hypot(target_x - end_pos[0], target_y - end_pos[1])
@@ -170,23 +175,33 @@ while running:
     if dist_after < 20:
         reward += 20.0
         hits += 1
+        hits_in_window += 1
         done = True
 
     steps += 1
+    episodes_in_window += 1
     if steps >= max_steps_per_episode:
         done = True
 
     next_state = get_state(theta1, theta2, (end_x, end_y), (target_x, target_y))
     agent.memory.append((state, action, reward, next_state, done))
-    agent.train_step()
+    loss = agent.train_step()
+    if loss is not None:
+        loss_ema = loss if loss_ema is None else 0.95 * loss_ema + 0.05 * loss
     score += reward
 
     if done:
         agent.update_epsilon()
         if episode % target_update_freq == 0:
             agent.target_net.load_state_dict(agent.policy_net.state_dict())
+        # Процент попаданий за последние 10 эпизодов
+        if episodes_in_window >= 10:
+            hit_rate = 100.0 * hits_in_window / episodes_in_window
+            episodes_in_window = 0
+            hits_in_window = 0
         episode += 1
         steps = 0
+        last_score = score
         score = 0
         target_x, target_y = get_random_target()
 
@@ -203,10 +218,13 @@ while running:
     # Телеметрия обучения
     info = [
         f"Эпизод: {episode}",
-        f"Успешных попаданий: {hits}",
+        f"Успешных попаданий: {hits} ({hit_rate:.0f}% за 10 эп.)",
         f"Дистанция: {dist_after:.1f} px",
         f"Epsilon (исследование): {agent.epsilon:.3f}",
-        f"Устройство: {agent.device}"
+        f"Счёт (пред. эп.): {last_score:.2f}",
+        f"Loss (EMA): {loss_ema:.4f}" if loss_ema is not None else "Loss: накопление опыта...",
+        f"Устройство: {agent.device}",
+        "[SPACE] - Turbo | [S] - Сохранить модель"
     ]
     for i, txt in enumerate(info):
         render = font.render(txt, True, (210, 210, 220))
