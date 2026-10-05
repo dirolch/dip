@@ -34,7 +34,7 @@ shoulder_link = Entity(parent=shoulder_pivot, model='cube', color=color.cyan, sc
 elbow_pivot = Entity(parent=shoulder_pivot, y=L1)
 elbow_link = Entity(parent=elbow_pivot, model='cube', color=color.orange, scale=(0.25, L2, 0.25), y=L2/2)
 
-# 5. Схват / Наконечник
+# 5. Схват / Наконечник (обязательно parent=wrist, иначе он не двигается с рукой)
 wrist = Entity(parent=elbow_pivot, y=L2)
 end_effector = Entity(parent=wrist, model='sphere', color=color.yellow, scale=0.3)
 
@@ -47,19 +47,27 @@ theta_yaw = 0.0       # Вращение базы
 theta_shoulder = 30.0 # Плечо
 theta_elbow = -45.0   # Локоть
 
+JOINT_LIMIT = 89.0    # Предельный наклон плеча/локтя, чтобы рука не уходила под пол
+ROT_SPEED = 60        # Скорость вращения суставов, град/сек
+
+
 def update():
     global theta_yaw, theta_shoulder, theta_elbow
-    
+
     # Плавное ручное управление с клавиатуры для проверки:
     # A / D -> вращение базы
     # W / S -> наклон плеча
     # Q / E -> сгиб локтя
-    if held_keys['d']: theta_yaw += 60 * time.dt
-    if held_keys['a']: theta_yaw -= 60 * time.dt
-    if held_keys['w']: theta_shoulder += 60 * time.dt
-    if held_keys['s']: theta_shoulder -= 60 * time.dt
-    if held_keys['e']: theta_elbow += 60 * time.dt
-    if held_keys['q']: theta_elbow -= 60 * time.dt
+    if held_keys['d']: theta_yaw += ROT_SPEED * time.dt
+    if held_keys['a']: theta_yaw -= ROT_SPEED * time.dt
+    if held_keys['w']: theta_shoulder += ROT_SPEED * time.dt
+    if held_keys['s']: theta_shoulder -= ROT_SPEED * time.dt
+    if held_keys['e']: theta_elbow += ROT_SPEED * time.dt
+    if held_keys['q']: theta_elbow -= ROT_SPEED * time.dt
+
+    # Ограничиваем углы физическими пределами
+    theta_shoulder = max(-JOINT_LIMIT, min(JOINT_LIMIT, theta_shoulder))
+    theta_elbow = max(-JOINT_LIMIT, min(JOINT_LIMIT, theta_elbow))
 
     # Применяем углы поворота
     base_yaw.rotation_y = theta_yaw

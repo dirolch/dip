@@ -54,6 +54,9 @@ try:
 except FileNotFoundError:
     print("Ошибка: Файл arm_model.pth не найден! Сначала сохрани модель в arm_rl.py клавишей S.")
     sys.exit()
+except Exception as e:
+    print(f"Ошибка загрузки модели: {e}")
+    sys.exit()
 
 # ==================== ДЕМО-РЕЖИМ (ИНФЕРЕНС) ====================
 pygame.init()
@@ -66,6 +69,8 @@ theta1 = math.radians(90)
 theta2 = math.radians(0)
 target_x, target_y = BASE_X, BASE_Y - 180
 
+REACH_TOLERANCE = 20  # Порог "достижения" цели, px (совпадает с arm_rl.py)
+
 running = True
 
 while running:
@@ -77,7 +82,7 @@ while running:
             running = False
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if event.button == 1:  # Клик левой кнопкой мыши
-                mx, my = pygame.mouse.get_pos()
+                mx, my = event.pos
                 # Проверяем, чтобы точка была в зоне досягаемости полукруга
                 dx = mx - BASE_X
                 dy = BASE_Y - my
@@ -92,7 +97,7 @@ while running:
 
     # Чистый выбор нейросети без случайности
     with torch.no_grad():
-        s = torch.FloatTensor(state).unsqueeze(0).to(device)
+        s = torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(device)
         q_vals = model(s)
         action = torch.argmax(q_vals).item()
 
@@ -100,21 +105,23 @@ while running:
     theta1 = (theta1 + d_t1) % (2 * math.pi)
     theta2 = (theta2 + d_t2) % (2 * math.pi)
 
-        # Отрисовка
+    # Отрисовка
     pygame.draw.circle(screen, (40, 40, 50), (BASE_X, BASE_Y), L1 + L2, 1)
+    pygame.draw.line(screen, (60, 60, 70), (0, BASE_Y + 16), (WIDTH, BASE_Y + 16), 2)  # Пол
     pygame.draw.circle(screen, (240, 70, 70), (int(target_x), int(target_y)), 10)
     pygame.draw.rect(screen, (80, 80, 90), (BASE_X - 35, BASE_Y, 70, 16), border_radius=4)
     pygame.draw.line(screen, (70, 140, 240), (BASE_X, BASE_Y), (joint_x, joint_y), 8)
     pygame.draw.line(screen, (90, 200, 250), (joint_x, joint_y), (end_x, end_y), 6)
     pygame.draw.circle(screen, (220, 220, 230), (BASE_X, BASE_Y), 8)
     pygame.draw.circle(screen, (220, 220, 230), (int(joint_x), int(joint_y)), 6)
-    pygame.draw.circle(screen, (50, 220, 100) if dist < 20 else (250, 180, 50), (int(end_x), int(end_y)), 6)
+    pygame.draw.circle(screen, (50, 220, 100) if dist < REACH_TOLERANCE else (250, 180, 50), (int(end_x), int(end_y)), 6)
 
     # Телеметрия инференса
     info = [
         "Режим: Тестирование обученной модели (Инференс)",
         "Кликни ЛКМ в полукруг, чтобы задать цель",
         f"Дистанция до цели: {dist:.1f} px",
+        "Статус: " + ("Цель достигнута! 🎯" if dist < REACH_TOLERANCE else "Двигаемся к цели..."),
         f"Устройство: {device}"
     ]
     for i, txt in enumerate(info):
